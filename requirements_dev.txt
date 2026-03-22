@@ -1,0 +1,13 @@
+# Development machine (CPU-only — code authoring and unit testing, no GPU training)
+pytest
+pyyaml
+torch==2.4.1+cpu       # CPU-only, installed for running unit tests
+torchvision==0.19.1+cpu
+
+# ultralytics installed via: uv pip install -e ultralytics/
+# (editable install of the local fork at ultralytics/ v8.2.103)
+
+# Training machine (replace torch/torchvision with):
+# torch==2.4.1+cu121
+# torchvision==0.19.1+cu121
+# uv pip install -e ultralytics/   (same local fork)

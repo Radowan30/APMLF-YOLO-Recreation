@@ -1,0 +1,36 @@
+# APMLF-YOLO: Progressive Multi-Level Feature Fusion YOLO
+# Paper: Section 3 — CAMLight backbone + AFPN+MHSA neck + 4-head detection
+# Base: YOLOv8n architecture with all C2f -> CAMLight
+# Target params: backbone+standard neck+3-head = 3.01M; full model = 5.1M
+#
+# CALIBRATION on training machine:
+#   1. Adjust CAMLight.CAM_E in cam_light.py until backbone ~= 3.01M params
+#   2. Adjust AFPNNeck factor/num_blocks in apmlf_detect.py until total ~= 5.1M
+
+nc: 6  # PKU PCB dataset: missing_hole, mouse_bite, open_circuit, short, spur, spurious_copper
+
+scales:
+  # depth_multiple, width_multiple, max_channels
+  # Use 'n' for smallest (matches paper YOLOv8n base)
+  n: [0.33, 0.25, 1024]
+
+backbone:
+  # [from, repeats, module, args]
+  # NOTE: All channel values are PRE-SCALE (yaml spec values).
+  # At 'n' scale (width_multiple=0.25): actual channels = spec x 0.25
+  # e.g. 64->16, 128->32, 256->64, 512->128, 1024->256
+  - [-1, 1, Conv, [64, 3, 2]]          # 0 - P1/2,  actual: 16ch @ 320x320
+  - [-1, 1, Conv, [128, 3, 2]]         # 1 - P2/4,  actual: 32ch @ 160x160
+  - [-1, 3, CAMLight, [128, True]]     # 2 - P2 CAMLight,  actual: 32ch
+  - [-1, 1, Conv, [256, 3, 2]]         # 3 - P3/8,  actual: 64ch @ 80x80
+  - [-1, 6, CAMLight, [256, True]]     # 4 - P3 CAMLight,  actual: 64ch
+  - [-1, 1, Conv, [512, 3, 2]]         # 5 - P4/16, actual: 128ch @ 40x40
+  - [-1, 6, CAMLight, [512, True]]     # 6 - P4 CAMLight,  actual: 128ch
+  - [-1, 1, Conv, [1024, 3, 2]]        # 7 - P5/32, actual: 256ch @ 20x20
+  - [-1, 3, CAMLight, [1024, True]]    # 8 - P5 CAMLight,  actual: 256ch
+  - [-1, 1, SPPF, [1024, 5]]          # 9 - P5+SPPF, actual: 256ch (1024x0.25=256)
+
+head:
+  # APMLFDetect receives: P2(idx 2), P3(idx 4), P4(idx 6), P5(idx 9)
+  # Encapsulates AFPN(P3,P4,P5) + MHSA(P5) + 4 detection heads
+  - [[2, 4, 6, 9], 1, APMLFDetect, [nc]]
