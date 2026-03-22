@@ -24,11 +24,9 @@ Before starting, make sure your **training machine** has:
 This is the first thing to do. Clone the project onto your training machine:
 
 ```bash
-git clone <repository-url>
-cd "APMLF_YOLO Implementation"
+git clone https://github.com/Radowan30/APMLF-YOLO-Recreation.git
+cd "APMLF-YOLO-Recreation"
 ```
-
-Replace `<repository-url>` with the actual URL of the GitHub repository (your team lead will provide this).
 
 After cloning, the folder will contain all the project files:
 
