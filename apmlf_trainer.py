@@ -21,6 +21,15 @@ from ultralytics.utils.slide_loss import v8DetectionLossWithSlide
 NAM_LAMBDA = 1e-4  # Sparsity regularization coefficient (paper Section 3.1)
 
 
+def _slide_init_criterion(self):
+    """Module-level named function so torch.save/pickle can serialize it.
+
+    Used to patch DetectionModel.init_criterion on the model instance.
+    Must be defined at module level (not as a lambda) to be picklable.
+    """
+    return v8DetectionLossWithSlide(self)
+
+
 class APMLFTrainer(DetectionTrainer):
     """DetectionTrainer with Slide Loss and NAM sparsity regularization."""
 
@@ -45,11 +54,10 @@ class APMLFTrainer(DetectionTrainer):
         if weights:
             model.load(weights)
         # Patch the model instance so model.loss() uses v8DetectionLossWithSlide.
-        # We bind a closure so `model` captures the right object.
+        # Uses a module-level named function (not a lambda) so torch.save/pickle
+        # can serialize the model without raising AttributeError on load.
         import types
-        model.init_criterion = types.MethodType(
-            lambda self_model: v8DetectionLossWithSlide(self_model), model
-        )
+        model.init_criterion = types.MethodType(_slide_init_criterion, model)
         return model
 
     def optimizer_step(self):
