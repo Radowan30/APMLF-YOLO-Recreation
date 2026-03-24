@@ -84,7 +84,7 @@ class v8DetectionLossWithSlide(v8DetectionLoss):
             from ultralytics.utils import DEFAULT_CFG
             model.args = DEFAULT_CFG
         super().__init__(model)
-        self.bce = SlideLoss()  # Replace BCEWithLogitsLoss with SlideLoss
+        self.bce = SlideLoss(reduction='none')  # Must be 'none': __call__ calls .sum() externally, matching parent BCEWithLogitsLoss(reduction='none')
 
     # NOTE: This method is a copy of v8DetectionLoss.__call__ from Ultralytics v8.2.103.
     # If upgrading ultralytics, re-sync this method body with the parent class.
