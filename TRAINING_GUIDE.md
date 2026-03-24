@@ -230,25 +230,31 @@ height    = (y2 - y1) / H
 Create a new file called `convert_deeppcb.py` **outside** the project folder (e.g. in your home directory), paste the script below into it, and run it to convert the annotations:
 
 ```python
-"""Convert DeepPCB annotations to YOLO format.
+"""Convert DeepPCB annotations to YOLO format with horizontal flip augmentation.
 
 Usage:
     python convert_deeppcb.py \
         --deeppcb_dir /path/to/DeepPCB/PCBData \
         --output_dir /path/to/pcb_dataset
 
-The script reads all annotation .txt files under deeppcb_dir,
-converts bounding boxes to normalized YOLO format, and writes
-label files alongside copies of the images in output_dir.
+Replicates the paper's dataset preparation (Section 4.1):
+  - Creates a horizontally flipped copy of every image, doubling the
+    dataset from 693 to ~1386 images.
+  - Splits the augmented dataset 8:1:1 AFTER augmentation, matching
+    the paper's stated order: "The enhanced dataset now contains 1408
+    images... split into training, validation, and test sets in an
+    8:1:1 ratio."
 
 Assumes DeepPCB images are 640x640. Verify this matches your
 downloaded copy — image size is used for normalization.
+
+Requires: Pillow (installed automatically as a dependency of torchvision).
 """
-import os
 import shutil
 import argparse
 import random
 from pathlib import Path
+from PIL import Image, ImageOps
 
 IMAGE_W = 640   # DeepPCB test image width
 IMAGE_H = 640   # DeepPCB test image height
@@ -263,15 +269,15 @@ DEFECT_CODE_TO_CLASS_ID = {
 }
 
 
-def convert_annotation(src_txt, dst_txt):
-    """Convert one DeepPCB annotation file to YOLO format."""
-    lines_out = []
+def parse_annotation(src_txt):
+    """Parse one DeepPCB annotation file, return list of (class_id, xc, yc, w, h)."""
+    boxes = []
     with open(src_txt) as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) != 5:
                 continue
-            x1, y1, x2, y2, code = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+            x1, y1, x2, y2, code = (int(p) for p in parts)
             class_id = DEFECT_CODE_TO_CLASS_ID.get(code)
             if class_id is None:
                 continue
@@ -279,9 +285,24 @@ def convert_annotation(src_txt, dst_txt):
             yc = (y1 + y2) / 2 / IMAGE_H
             w  = (x2 - x1) / IMAGE_W
             h  = (y2 - y1) / IMAGE_H
-            lines_out.append(f"{class_id} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}")
+            boxes.append((class_id, xc, yc, w, h))
+    return boxes
+
+
+def flip_boxes(boxes):
+    """Flip bounding boxes for a horizontally mirrored image.
+
+    In YOLO format, horizontal flip maps x_center -> 1 - x_center.
+    y_center, width, and height are unchanged.
+    """
+    return [(cls, 1.0 - xc, yc, w, h) for cls, xc, yc, w, h in boxes]
+
+
+def write_label(dst_txt, boxes):
+    """Write YOLO-format label file."""
+    lines = [f"{cls} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}" for cls, xc, yc, w, h in boxes]
     with open(dst_txt, 'w') as f:
-        f.write('\n'.join(lines_out))
+        f.write('\n'.join(lines))
 
 
 def main():
@@ -296,42 +317,58 @@ def main():
     deeppcb = Path(args.deeppcb_dir)
     out = Path(args.output_dir)
 
-    # Collect all image+annotation pairs
-    pairs = []
+    # Collect all original image+annotation pairs
+    orig_pairs = []
     for ann_file in sorted(deeppcb.rglob('*.txt')):
-        # Each .txt has a matching .jpg
         img_file = ann_file.with_suffix('.jpg')
         if img_file.exists():
-            pairs.append((img_file, ann_file))
+            orig_pairs.append((img_file, ann_file))
 
-    if not pairs:
+    if not orig_pairs:
         print(f"No image/annotation pairs found in {deeppcb}")
         print("Check that --deeppcb_dir points to the correct folder.")
         return
 
-    print(f"Found {len(pairs)} image/annotation pairs")
+    print(f"Found {len(orig_pairs)} original image/annotation pairs")
 
-    # Shuffle and split 8:1:1
+    # Build augmented list: original + horizontal flip for each image.
+    # Augment FIRST, then split — matching the paper's order of operations.
+    augmented = []
+    for img_file, ann_file in orig_pairs:
+        boxes = parse_annotation(ann_file)
+        if not boxes:
+            continue
+        augmented.append(('orig', img_file, boxes,             img_file.stem))
+        augmented.append(('flip', img_file, flip_boxes(boxes), img_file.stem + '_flip'))
+
+    print(f"Augmented dataset size (orig + flip): {len(augmented)}")
+
+    # Shuffle then split 8:1:1
     random.seed(args.seed)
-    random.shuffle(pairs)
-    n = len(pairs)
+    random.shuffle(augmented)
+    n = len(augmented)
     n_train = int(n * 0.8)
     n_val   = int(n * 0.1)
     splits = {
-        'train': pairs[:n_train],
-        'val':   pairs[n_train:n_train + n_val],
-        'test':  pairs[n_train + n_val:],
+        'train': augmented[:n_train],
+        'val':   augmented[n_train:n_train + n_val],
+        'test':  augmented[n_train + n_val:],
     }
 
-    for split, split_pairs in splits.items():
+    for split, items in splits.items():
         img_dir = out / 'images' / split
         lbl_dir = out / 'labels' / split
         img_dir.mkdir(parents=True, exist_ok=True)
         lbl_dir.mkdir(parents=True, exist_ok=True)
-        for img_file, ann_file in split_pairs:
-            shutil.copy(img_file, img_dir / img_file.name)
-            convert_annotation(ann_file, lbl_dir / (img_file.stem + '.txt'))
-        print(f"  {split}: {len(split_pairs)} images")
+        for kind, img_file, boxes, stem in items:
+            dst_img = img_dir / (stem + '.jpg')
+            dst_lbl = lbl_dir / (stem + '.txt')
+            if kind == 'orig':
+                shutil.copy(img_file, dst_img)
+            else:
+                ImageOps.mirror(Image.open(img_file)).save(dst_img)
+            write_label(dst_lbl, boxes)
+        print(f"  {split}: {len(items)} images")
 
     print(f"\nDone. Dataset written to: {out}")
     print("Update 'path' in data/pcb_defect.yaml to:", out.resolve())
@@ -357,16 +394,16 @@ python convert_deeppcb.py \
 ```
 pcb_dataset/
 ├── images/
-│   ├── train/     ← ~80% of images
-│   ├── val/       ← ~10% of images
-│   └── test/      ← ~10% of images
+│   ├── train/     ← ~1109 images (~80% of ~1386)
+│   ├── val/       ← ~138 images (~10%)
+│   └── test/      ← ~138 images (~10%)
 └── labels/
     ├── train/     ← matching .txt label files (YOLO format)
     ├── val/
     └── test/
 ```
 
-The paper used 693 original images augmented to **1,408 images total** (horizontal flip + random crop) before splitting 8:1:1. The conversion script handles the split; data augmentation is handled automatically during training by `train.py`.
+The paper augmented 693 original images to **1,408 images** (horizontal flip + random crop) before splitting 8:1:1. This script replicates that: it creates a horizontally flipped copy of every image (~1,386 images total), then splits 8:1:1. The 22-image difference from the paper's 1,408 comes from unspecified random crops that are not reproducible without the authors' original code; the effect is negligible (1.6% of the dataset).
 
 ---
 
