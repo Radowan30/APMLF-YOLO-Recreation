@@ -631,6 +631,7 @@ After training completes, evaluate on the held-out test set to get your final nu
 ```bash
 python -c "
 import sys; sys.path.insert(0, 'ultralytics')
+import apmlf_trainer  # required: registers _APMLFDetectionModel so best.pt deserializes correctly
 from ultralytics.models import YOLO
 model = YOLO('runs/apmlf_yolo/pcb_defect/weights/best.pt')
 results = model.val(data='data/pcb_defect.yaml', split='test')
@@ -645,6 +646,7 @@ print(f'mAP50-95:   {results.box.map * 100:.1f}%')
 ```python
 import sys
 sys.path.insert(0, 'ultralytics')
+import apmlf_trainer  # required: registers _APMLFDetectionModel so best.pt deserializes correctly
 from ultralytics.models import YOLO
 model = YOLO('runs/apmlf_yolo/pcb_defect/weights/best.pt')
 results = model.val(data='data/pcb_defect.yaml', split='test')
