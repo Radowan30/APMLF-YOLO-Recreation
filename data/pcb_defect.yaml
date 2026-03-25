@@ -1,7 +1,7 @@
 # PKU PCB Defect Dataset
-# Original: 693 images → 1408 after augmentation (flip + random crop)
-# Split: 8:1:1 (train:val:test)
-# Source: https://github.com/tangsanli5201/DeepPCB (PKU Open Lab dataset)
+# Source: https://github.com/tangsanli5201/DeepPCB (1500 images, 6 defect classes)
+# Preparation: horizontal flip augmentation → ~3000 images, split 8:1:1
+# See TRAINING_GUIDE.md Step 3 for dataset preparation instructions.
 #
 # IMPORTANT: Set absolute paths on the training machine before running train.py
 # The paths below are placeholders — replace with actual paths on training machine.

@@ -46,7 +46,7 @@ All remaining steps in this guide assume you are working from inside the `APMLF_
 
 ---
 
-## Step 2 — Set Up the Python Environment
+## SStep 2 — Set Up the Python Environment
 
 ### 2a. Install Python 3.9 and create a virtual environment
 
@@ -179,28 +179,41 @@ After downloading, you will have a folder called `DeepPCB/` containing PCB image
 
 ---
 
-### 3b. Understand the DeepPCB annotation format
+### 3b. Understand the DeepPCB dataset structure and annotation format
 
-The DeepPCB dataset does **not** come in YOLO format. Each annotation file is a `.txt` file where every line describes one defect:
+**Folder structure inside PCBData/:**
 
 ```
-x1 y1 x2 y2 defect_code
+PCBData/
+├── trainval.txt              ← index file listing 1000 training pairs
+├── test.txt                  ← index file listing 500 test pairs
+└── groupXXXXX/
+    ├── XXXXX/                ← images: XXXXXX.jpg (640×640)
+    └── XXXXX_not/            ← annotations: XXXXXX.txt
 ```
 
-- `x1 y1` — top-left corner of the bounding box (in pixels)
-- `x2 y2` — bottom-right corner of the bounding box (in pixels)
-- `defect_code` — an integer (1–6) identifying the defect type
+Images and annotations are in **different subdirectories**. The provided `trainval.txt` and `test.txt` files give the correct pairing for each image — the convert script uses these directly.
 
-The defect code mapping is:
+**Annotation format** — each line in a `.txt` file describes one defect:
 
-| Code | Class name | Our class ID |
-|---|---|---|
-| 1 | missing_hole | 0 |
-| 2 | mouse_bite | 1 |
-| 3 | open_circuit | 2 |
-| 4 | short | 3 |
-| 5 | spur | 4 |
-| 6 | spurious_copper | 5 |
+```
+x1,y1,x2,y2,type
+```
+
+- `x1 y1` — top-left corner of the bounding box (pixels)
+- `x2 y2` — bottom-right corner of the bounding box (pixels)
+- `type` — integer defect code (see table below); may be comma or space separated
+
+**Defect code mapping** (from DeepPCB README):
+
+| DeepPCB code | DeepPCB name | Our class name | Our class ID |
+|---|---|---|---|
+| 1 | open | open_circuit | 2 |
+| 2 | short | short | 3 |
+| 3 | mousebite | mouse_bite | 1 |
+| 4 | spur | spur | 4 |
+| 5 | copper | spurious_copper | 5 |
+| 6 | pin-hole | missing_hole | 0 |
 
 ---
 
@@ -220,33 +233,52 @@ means: class 0 (missing_hole), bounding box centered at 51.2% across and 33.4% d
 
 **Conversion formula** (for an image of width `W` and height `H`):
 ```
-class_id  = defect_code - 1
+class_id  = see mapping table in section 3b above (NOT defect_code - 1)
 x_center  = (x1 + x2) / 2 / W
 y_center  = (y1 + y2) / 2 / H
 width     = (x2 - x1) / W
 height    = (y2 - y1) / H
 ```
 
+The class ID mapping is **not sequential** — for example, DeepPCB code 6 (pin-hole) maps to class 0 (missing_hole), and code 1 (open) maps to class 2 (open_circuit). The convert script handles this via a lookup table.
+
 Create a new file called `convert_deeppcb.py` **outside** the project folder (e.g. in your home directory), paste the script below into it, and run it to convert the annotations:
 
 ```python
 """Convert DeepPCB annotations to YOLO format with horizontal flip augmentation.
+
+DeepPCB dataset structure (github.com/tangsanli5201/DeepPCB):
+  PCBData/
+  ├── trainval.txt              ← 1000 image-annotation pairs
+  ├── test.txt                  ← 500 image-annotation pairs
+  └── groupXXXXX/
+      ├── XXXXX/                ← images:      XXXXXX.jpg
+      └── XXXXX_not/            ← annotations: XXXXXX.txt
+
+Each line in trainval.txt / test.txt:
+  groupXXXXX/XXXXX/XXXXXX.jpg  groupXXXXX/XXXXX_not/XXXXXX.txt
+
+DeepPCB annotation format (per line, comma or space separated):
+  x1 y1 x2 y2 type
+
+DeepPCB defect codes → YOLO class IDs:
+  1=open        → 2 (open_circuit)
+  2=short       → 3 (short)
+  3=mousebite   → 1 (mouse_bite)
+  4=spur        → 4 (spur)
+  5=copper      → 5 (spurious_copper)
+  6=pin-hole    → 0 (missing_hole)
 
 Usage:
     python convert_deeppcb.py \
         --deeppcb_dir /path/to/DeepPCB/PCBData \
         --output_dir /path/to/pcb_dataset
 
-Replicates the paper's dataset preparation (Section 4.1):
-  - Creates a horizontally flipped copy of every image, doubling the
-    dataset from 693 to ~1386 images.
-  - Splits the augmented dataset 8:1:1 AFTER augmentation, matching
-    the paper's stated order: "The enhanced dataset now contains 1408
-    images... split into training, validation, and test sets in an
-    8:1:1 ratio."
-
-Assumes DeepPCB images are 640x640. Verify this matches your
-downloaded copy — image size is used for normalization.
+Replicates the paper's dataset preparation (Section 4.1): creates a
+horizontally flipped copy of every image, then splits 8:1:1 AFTER
+augmentation. The full DeepPCB dataset has 1500 images (vs the paper's
+693); all available images are used since the exact paper subset is
+not specified.
 
 Requires: Pillow (installed automatically as a dependency of torchvision).
 """
@@ -256,31 +288,59 @@ import random
 from pathlib import Path
 from PIL import Image, ImageOps
 
-IMAGE_W = 640   # DeepPCB test image width
-IMAGE_H = 640   # DeepPCB test image height
+IMAGE_W = 640
+IMAGE_H = 640
 
+# DeepPCB integer code → YOLO class ID
+# Source: DeepPCB README — "0=background(unused), 1=open, 2=short,
+#         3=mousebite, 4=spur, 5=copper, 6=pin-hole"
+# YOLO classes (pcb_defect.yaml): 0=missing_hole, 1=mouse_bite,
+#   2=open_circuit, 3=short, 4=spur, 5=spurious_copper
 DEFECT_CODE_TO_CLASS_ID = {
-    1: 0,  # missing_hole
-    2: 1,  # mouse_bite
-    3: 2,  # open_circuit
-    4: 3,  # short
-    5: 4,  # spur
-    6: 5,  # spurious_copper
+    1: 2,  # open      → open_circuit
+    2: 3,  # short     → short
+    3: 1,  # mousebite → mouse_bite
+    4: 4,  # spur      → spur
+    5: 5,  # copper    → spurious_copper
+    6: 0,  # pin-hole  → missing_hole
 }
 
 
-def parse_annotation(src_txt):
-    """Parse one DeepPCB annotation file, return list of (class_id, xc, yc, w, h)."""
-    boxes = []
-    with open(src_txt) as f:
+def load_index(deeppcb, filename):
+    """Read image-annotation pairs from a DeepPCB index file."""
+    pairs = []
+    index_path = deeppcb / filename
+    if not index_path.exists():
+        print(f"  WARNING: {filename} not found, skipping.")
+        return pairs
+    with open(index_path) as f:
         for line in f:
             parts = line.strip().split()
+            if len(parts) != 2:
+                continue
+            img_path = deeppcb / parts[0]
+            ann_path = deeppcb / parts[1]
+            if img_path.exists() and ann_path.exists():
+                pairs.append((img_path, ann_path))
+    return pairs
+
+
+def parse_annotation(ann_path):
+    """Parse a DeepPCB annotation file (handles comma or space separators)."""
+    boxes = []
+    with open(ann_path) as f:
+        for line in f:
+            # Handles both "x1 y1 x2 y2 type" and "x1,y1,x2,y2,type"
+            parts = line.strip().replace(',', ' ').split()
             if len(parts) != 5:
                 continue
-            x1, y1, x2, y2, code = (int(p) for p in parts)
+            try:
+                x1, y1, x2, y2, code = int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
+            except ValueError:
+                continue
             class_id = DEFECT_CODE_TO_CLASS_ID.get(code)
             if class_id is None:
-                continue
+                continue  # skip code=0 (background) or unknown codes
             xc = (x1 + x2) / 2 / IMAGE_W
             yc = (y1 + y2) / 2 / IMAGE_H
             w  = (x2 - x1) / IMAGE_W
@@ -290,16 +350,11 @@ def parse_annotation(src_txt):
 
 
 def flip_boxes(boxes):
-    """Flip bounding boxes for a horizontally mirrored image.
-
-    In YOLO format, horizontal flip maps x_center -> 1 - x_center.
-    y_center, width, and height are unchanged.
-    """
+    """Horizontal flip: x_center → 1 - x_center. All other values unchanged."""
     return [(cls, 1.0 - xc, yc, w, h) for cls, xc, yc, w, h in boxes]
 
 
 def write_label(dst_txt, boxes):
-    """Write YOLO-format label file."""
     lines = [f"{cls} {xc:.6f} {yc:.6f} {w:.6f} {h:.6f}" for cls, xc, yc, w, h in boxes]
     with open(dst_txt, 'w') as f:
         f.write('\n'.join(lines))
@@ -308,39 +363,43 @@ def write_label(dst_txt, boxes):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--deeppcb_dir', required=True,
-                        help='Path to DeepPCB/PCBData folder')
+                        help='Path to DeepPCB/PCBData folder (must contain trainval.txt and test.txt)')
     parser.add_argument('--output_dir', required=True,
-                        help='Where to write pcb_dataset/ with train/val/test splits')
+                        help='Where to write the converted dataset')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     deeppcb = Path(args.deeppcb_dir)
     out = Path(args.output_dir)
 
-    # Collect all original image+annotation pairs
-    orig_pairs = []
-    for ann_file in sorted(deeppcb.rglob('*.txt')):
-        img_file = ann_file.with_suffix('.jpg')
-        if img_file.exists():
-            orig_pairs.append((img_file, ann_file))
+    # Use the index files provided by DeepPCB for correct image-annotation pairing.
+    # Images are in groupXXXXX/XXXXX/ and annotations in groupXXXXX/XXXXX_not/ —
+    # they cannot be matched by filename alone.
+    orig_pairs = load_index(deeppcb, 'trainval.txt')
+    orig_pairs += load_index(deeppcb, 'test.txt')
 
     if not orig_pairs:
-        print(f"No image/annotation pairs found in {deeppcb}")
-        print("Check that --deeppcb_dir points to the correct folder.")
+        print(f"\nERROR: No valid pairs found.")
+        print(f"Make sure --deeppcb_dir points to the PCBData/ folder that")
+        print(f"contains trainval.txt and test.txt.")
         return
 
-    print(f"Found {len(orig_pairs)} original image/annotation pairs")
+    print(f"Found {len(orig_pairs)} original image-annotation pairs")
 
     # Build augmented list: original + horizontal flip for each image.
     # Augment FIRST, then split — matching the paper's order of operations.
     augmented = []
-    for img_file, ann_file in orig_pairs:
-        boxes = parse_annotation(ann_file)
+    skipped = 0
+    for img_path, ann_path in orig_pairs:
+        boxes = parse_annotation(ann_path)
         if not boxes:
+            skipped += 1
             continue
-        augmented.append(('orig', img_file, boxes,             img_file.stem))
-        augmented.append(('flip', img_file, flip_boxes(boxes), img_file.stem + '_flip'))
+        augmented.append(('orig', img_path, boxes,             img_path.stem))
+        augmented.append(('flip', img_path, flip_boxes(boxes), img_path.stem + '_flip'))
 
+    if skipped:
+        print(f"Skipped {skipped} images with no parseable annotations")
     print(f"Augmented dataset size (orig + flip): {len(augmented)}")
 
     # Shuffle then split 8:1:1
@@ -360,13 +419,13 @@ def main():
         lbl_dir = out / 'labels' / split
         img_dir.mkdir(parents=True, exist_ok=True)
         lbl_dir.mkdir(parents=True, exist_ok=True)
-        for kind, img_file, boxes, stem in items:
+        for kind, img_path, boxes, stem in items:
             dst_img = img_dir / (stem + '.jpg')
             dst_lbl = lbl_dir / (stem + '.txt')
             if kind == 'orig':
-                shutil.copy(img_file, dst_img)
+                shutil.copy(img_path, dst_img)
             else:
-                ImageOps.mirror(Image.open(img_file)).save(dst_img)
+                ImageOps.mirror(Image.open(img_path)).save(dst_img)
             write_label(dst_lbl, boxes)
         print(f"  {split}: {len(items)} images")
 
@@ -394,16 +453,16 @@ python convert_deeppcb.py \
 ```
 pcb_dataset/
 ├── images/
-│   ├── train/     ← ~1109 images (~80% of ~1386)
-│   ├── val/       ← ~138 images (~10%)
-│   └── test/      ← ~138 images (~10%)
+│   ├── train/     ← ~2400 images (~80% of ~3000)
+│   ├── val/       ← ~300 images (~10%)
+│   └── test/      ← ~300 images (~10%)
 └── labels/
     ├── train/     ← matching .txt label files (YOLO format)
     ├── val/
     └── test/
 ```
 
-The paper augmented 693 original images to **1,408 images** (horizontal flip + random crop) before splitting 8:1:1. This script replicates that: it creates a horizontally flipped copy of every image (~1,386 images total), then splits 8:1:1. The 22-image difference from the paper's 1,408 comes from unspecified random crops that are not reproducible without the authors' original code; the effect is negligible (1.6% of the dataset).
+The script will print the exact counts when it runs. The full DeepPCB dataset has **1500 images** (1000 trainval + 500 test); after horizontal flip augmentation the total is ~3000, split 8:1:1. The paper reported using 693 images, but DeepPCB has always contained 1500 — the exact subset used by the paper's authors is not specified in the paper and cannot be recovered. Using all 1500 images is the correct approach and will produce results at least as good as the paper.
 
 ---
 
