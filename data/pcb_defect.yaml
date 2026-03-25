@@ -1,6 +1,7 @@
-# PKU PCB Defect Dataset
-# Source: https://github.com/tangsanli5201/DeepPCB (1500 images, 6 defect classes)
-# Preparation: horizontal flip augmentation → ~3000 images, split 8:1:1
+# PKU PCB Defect Dataset (HRIPCB)
+# Source: https://www.kaggle.com/datasets/akhatova/pcb-defects (693 images, 6 defect classes)
+#         or GitHub: https://github.com/Ironbrotherstyle/PCB-DATASET
+# Preparation: horizontal flip augmentation → 1386 images, split 8:1:1
 # See TRAINING_GUIDE.md Step 3 for dataset preparation instructions.
 #
 # IMPORTANT: Set absolute paths on the training machine before running train.py

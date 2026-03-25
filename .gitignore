@@ -36,16 +36,16 @@ build/
 
 # =============================================================================
 # Dataset files (dataset is downloaded separately — only the YAML config is
-# committed; see TRAINING_GUIDE.md Step 1 for how to obtain the dataset)
+# committed; see TRAINING_GUIDE.md Step 3 for how to obtain the dataset)
 # =============================================================================
 data/images/
 data/labels/
-data/PCBData/
+data/PCB_DATASET/
 
 # =============================================================================
 # Temporary helper scripts created during setup (see TRAINING_GUIDE.md)
 # =============================================================================
-convert_deeppcb.py
+convert_pcb.py
 check_params.py
 evaluate.py
 

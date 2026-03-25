@@ -77,7 +77,7 @@ The short version:
 
 1. Clone this repo
 2. Set up a Python 3.9 environment and install dependencies
-3. Download and convert the [DeepPCB dataset](https://github.com/tangsanli5201/DeepPCB)
+3. Download and convert the [PKU PCB Defect Dataset](https://www.kaggle.com/datasets/akhatova/pcb-defects)
 4. Set the dataset path in `data/pcb_defect.yaml`
 5. Run `python train.py --data data/pcb_defect.yaml --device 0`
 
