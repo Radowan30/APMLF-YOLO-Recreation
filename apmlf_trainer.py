@@ -14,6 +14,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ultralytics'))
 
 import torch
+from ultralytics.nn.tasks import DetectionModel
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 from ultralytics.utils.slide_loss import v8DetectionLossWithSlide
 
@@ -21,13 +22,29 @@ from ultralytics.utils.slide_loss import v8DetectionLossWithSlide
 NAM_LAMBDA = 1e-4  # Sparsity regularization coefficient (paper Section 3.1)
 
 
-def _slide_init_criterion(self):
-    """Module-level named function so torch.save/pickle can serialize it.
+class _APMLFDetectionModel(DetectionModel):
+    """DetectionModel subclass that uses SlideLoss as its criterion.
 
-    Used to patch DetectionModel.init_criterion on the model instance.
-    Must be defined at module level (not as a lambda) to be picklable.
+    Defined at module level so torch.save/pickle can find it via
+    'apmlf_trainer._APMLFDetectionModel' when deserializing a checkpoint.
+
+    Why types.MethodType failed: Python pickles a bound method as
+      (builtins.getattr, (obj, func_name))
+    and reconstructs it by calling getattr(obj, func_name). Since the
+    patched function was not an attribute of DetectionModel or any of its
+    bases, getattr fell into Module.__getattr__ and raised AttributeError.
+
+    By overriding init_criterion on the class instead of the instance,
+    the method never enters model.__dict__ and is never separately pickled.
+    The class itself is what gets serialized, and it is resolved correctly
+    as long as apmlf_trainer has been imported in the current process.
+
+    Note: loading best.pt in a fresh Python session (e.g. for standalone
+    inference) requires `import apmlf_trainer` before torch.load / YOLO().
     """
-    return v8DetectionLossWithSlide(self)
+
+    def init_criterion(self):
+        return v8DetectionLossWithSlide(self)
 
 
 class APMLFTrainer(DetectionTrainer):
@@ -44,8 +61,13 @@ class APMLFTrainer(DetectionTrainer):
         return v8DetectionLossWithSlide(self.model)
 
     def get_model(self, cfg=None, weights=None, verbose=True):
-        """Load APMLF-YOLO model and patch its init_criterion to use Slide Loss."""
-        from ultralytics.nn.tasks import DetectionModel
+        """Load APMLF-YOLO model and switch its class to _APMLFDetectionModel.
+
+        Switching __class__ (rather than setting model.init_criterion via
+        types.MethodType) keeps init_criterion on the class, not in
+        model.__dict__, so torch.save/pickle serializes it correctly.
+        All weights and state are preserved — only the type() changes.
+        """
         model = DetectionModel(
             cfg or 'ultralytics/cfg/models/v8/apmlf_yolo.yaml',
             nc=self.data['nc'],
@@ -53,11 +75,7 @@ class APMLFTrainer(DetectionTrainer):
         )
         if weights:
             model.load(weights)
-        # Patch the model instance so model.loss() uses v8DetectionLossWithSlide.
-        # Uses a module-level named function (not a lambda) so torch.save/pickle
-        # can serialize the model without raising AttributeError on load.
-        import types
-        model.init_criterion = types.MethodType(_slide_init_criterion, model)
+        model.__class__ = _APMLFDetectionModel
         return model
 
     def optimizer_step(self):
